@@ -5,3 +5,5 @@ edition = "2021"
 
 [dependencies]
 time = "=0.3.41"
+actix-web = "4"
+serde = { version = "1.0", features = ["derive"] }
