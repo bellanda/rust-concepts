@@ -7,3 +7,5 @@ edition = "2021"
 time = "=0.3.41"
 actix-web = "4"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["arbitrary_precision"] }
+xitca-web = { version = "*" , features = ["logger"]}
