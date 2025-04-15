@@ -9,3 +9,14 @@ actix-web = "4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["arbitrary_precision"] }
 xitca-web = { version = "*" , features = ["logger"]}
+polars = { version = "0.46.0", features = ["lazy"] }
+chrono = "0.4.40"
+calamine = "0.25"
+anyhow = "1.0.98"
+tokio = { version = "1.44.2", features = ["full"] }
+polars-sql = "0.46.0"
+
+dotenv = "0.15"           # Carrega o arquivo .env
+oracle = "0.6"            # Cliente Oracle para Rust (confira a versão atual)
+log = "0.4"               # Logging
+env_logger = "0.9"        # Inicializador do log
