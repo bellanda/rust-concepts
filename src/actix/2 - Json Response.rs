@@ -1,9 +1,15 @@
-use actix_web::{post, web, App, HttpServer, Responder};
-use serde::{Deserialize, Serialize};
+use actix_web::post;
+use actix_web::web;
+use actix_web::App;
+use actix_web::HttpServer;
+use actix_web::Responder;
+use serde::Deserialize;
+use serde::Serialize;
 
 // Estrutura que representa o JSON de entrada/saída
 #[derive(Serialize, Deserialize, Debug)]
-struct Dados {
+struct Dados
+{
     campo1: String,
     campo2: i32,
     // Adicione mais campos conforme necessário (o JSON pode ser grande e complexo)
@@ -11,18 +17,17 @@ struct Dados {
 
 // Endpoint que recebe JSON via POST e retorna o mesmo JSON
 #[post("/echo")]
-async fn echo_json(dados: web::Json<Dados>) -> impl Responder {
+async fn echo_json(dados: web::Json<Dados>) -> impl Responder
+{
     println!("Recebido: {:?}", dados);
     web::Json(dados.into_inner()) // Retorna o mesmo JSON
 }
 
 #[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    HttpServer::new(|| {
-        App::new()
-            .service(echo_json)
-    })
-    .bind("127.0.0.1:8080")?
-    .run()
-    .await
+async fn main() -> std::io::Result<()>
+{
+    HttpServer::new(|| App::new().service(echo_json))
+        .bind("127.0.0.1:8080")?
+        .run()
+        .await
 }

@@ -1,0 +1,29 @@
+# rustup toolchain install nightly
+# rustup default nightly
+
+# Configurações principais
+max_width = 125
+hard_tabs = false
+tab_spaces = 4
+newline_style = "Unix"
+
+# Configurações de CHAVES (garantindo que vão para próxima linha)
+brace_style = "AlwaysNextLine"       # Para structs, enums, impls, etc.
+control_brace_style = "AlwaysNextLine" # Para if/else/loop/match/etc.
+
+# Casos específicos que podem sobrescrever as regras gerais:
+where_single_line = false            # Força where para múltiplas linhas
+match_arm_blocks = true              # Garante chaves em match arms
+match_block_trailing_comma = true    # Vírgula após último match arm
+
+# Configurações de imports (como solicitado)
+reorder_imports = true
+imports_granularity = "Item"
+group_imports = "StdExternalCrate"
+
+# Outras configurações para garantir consistência
+empty_item_single_line = false       # Não compactar {} vazios em uma linha
+trailing_comma = "Vertical"
+trailing_semicolon = true
+use_field_init_shorthand = true
+use_try_shorthand = true

@@ -58,10 +58,7 @@ fn main()
     for (h, m, expected) in tests
     {
         let clock = Clock::new(h, m);
-        println!(
-            "{:>4}h {:>5}m => {:?} (expected: {})",
-            h, m, clock, expected
-        );
+        println!("{:>4}h {:>5}m => {:?} (expected: {})", h, m, clock, expected);
         assert_eq!(clock.to_string(), expected);
     }
 }

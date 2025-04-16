@@ -1,8 +1,10 @@
-pub fn reverse(s: &str) -> String {
+pub fn reverse(s: &str) -> String
+{
     s.chars().rev().collect()
 }
 
-fn main() {
+fn main()
+{
     println!("{}", reverse("stressed"));
     println!("{}", reverse("strops"));
     println!("{}", reverse("racecar"));
