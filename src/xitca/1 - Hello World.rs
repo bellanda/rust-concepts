@@ -8,6 +8,11 @@ async fn index() -> &'static str
     "Hello world!!"
 }
 
+async fn return_json() -> Json<String>
+{
+    Json("Hello world!!".to_string())
+}
+
 fn main() -> std::io::Result<()>
 {
     App::new()

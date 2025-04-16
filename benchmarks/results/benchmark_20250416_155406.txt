@@ -1,0 +1,42 @@
+Resultados do Benchmark - 2025-04-16 15:54:06.894891325 -03:00
+==================================================
+
+Endpoint: /users
+Requests: 1638100
+Requests por segundo: 109204.94
+Taxa de sucesso: 100.0%
+Latência mínima: 0.12 ms
+Latência média: 0.45 ms
+Latência mediana: 0.40 ms
+Latência p90: 0.60 ms
+Latência p99: 1.44 ms
+Latência máxima: 4.94 ms
+
+--------------------------------------------------
+
+Endpoint: /users-df-json
+Requests: 1107700
+Requests por segundo: 73840.56
+Taxa de sucesso: 100.0%
+Latência mínima: 0.16 ms
+Latência média: 0.60 ms
+Latência mediana: 0.55 ms
+Latência p90: 0.87 ms
+Latência p99: 1.47 ms
+Latência máxima: 5.64 ms
+
+--------------------------------------------------
+
+Endpoint: /user
+Requests: 1904200
+Requests por segundo: 126944.91
+Taxa de sucesso: 100.0%
+Latência mínima: 0.12 ms
+Latência média: 0.39 ms
+Latência mediana: 0.36 ms
+Latência p90: 0.50 ms
+Latência p99: 0.98 ms
+Latência máxima: 2.86 ms
+
+--------------------------------------------------
+
