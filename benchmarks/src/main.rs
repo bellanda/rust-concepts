@@ -84,12 +84,7 @@ struct BenchmarkResult
 
 /// URLs para testar
 const BASE_URL: &str = "http://localhost:8080";
-const ENDPOINTS: &[&str] = &[
-    "/",
-    // "/user",
-    "/users-df-json",
-    // "/users"
-];
+const ENDPOINTS: &[&str] = &["/users-df"];
 
 // Diretório para salvar os resultados
 const RESULTS_DIR: &str = "results";

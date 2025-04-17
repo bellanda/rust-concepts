@@ -1,24 +1,22 @@
 use actix_web::http::StatusCode;
 use actix_web::HttpResponse;
 use actix_web::ResponseError;
+use http::Error as HttpError;
 use polars::prelude::PolarsError;
 use serde_json::Error as SerdeError;
-use thiserror::Error;
+use thiserror::Error; // importar o http::Error
 
 #[derive(Error, Debug)]
 pub enum ApiError
 {
-    // #[error("Erro interno do servidor")]
-    // Internal,
-
-    // #[error("Dados inválidos: {0}")]
-    // BadRequest(String),
     #[error("Erro na operação com DataFrame: {0}")]
     DataFrame(#[from] PolarsError),
 
     #[error("Falha ao (de)serializar JSON: {0}")]
     Json(#[from] SerdeError),
-    // … outros variants conforme sua necessidade
+
+    #[error("Falha ao construir resposta HTTP: {0}")]
+    Http(#[from] HttpError), // adiciona o From<HttpError>
 }
 
 impl ResponseError for ApiError
@@ -27,18 +25,14 @@ impl ResponseError for ApiError
     {
         match *self
         {
-            // ApiError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
-            // ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
             ApiError::DataFrame(_) => StatusCode::UNPROCESSABLE_ENTITY,
             ApiError::Json(_) => StatusCode::BAD_REQUEST,
+            ApiError::Http(_) => StatusCode::INTERNAL_SERVER_ERROR, // ou outro código adequado
         }
     }
 
     fn error_response(&self) -> HttpResponse
     {
-        // Aqui você pode montar um JSON de erro mais rico, se quiser
-        HttpResponse::build(self.status_code()).json(serde_json::json!({
-            "error": self.to_string()
-        }))
+        HttpResponse::build(self.status_code()).json(serde_json::json!({ "error": self.to_string() }))
     }
 }

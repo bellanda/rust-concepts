@@ -1,0 +1,16 @@
+Resultados do Benchmark - 2025-04-17 13:23:27.800524355 -03:00
+==================================================
+
+Endpoint: /users-df
+Requests: 500
+Requests por segundo: 30.70
+Taxa de sucesso: 100.0%
+Latência mínima: 423.65 ms
+Latência média: 2094.56 ms
+Latência mediana: 2201.81 ms
+Latência p90: 3150.90 ms
+Latência p99: 3449.79 ms
+Latência máxima: 3472.22 ms
+
+--------------------------------------------------
+
