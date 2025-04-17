@@ -58,33 +58,62 @@ async fn user() -> impl Responder
 #[get("/users-df-json")]
 async fn users_df_json() -> Result<HttpResponse, ApiError>
 {
-    let df: DataFrame = df!(
-        "name" => ["Alice Archer", "Ben Brown", "Chloe Cooper", "Daniel Donovan"],
-        "birthdate" => [
-            NaiveDate::from_ymd_opt(1997, 1, 10).unwrap(),
-            NaiveDate::from_ymd_opt(1985, 2, 15).unwrap(),
-            NaiveDate::from_ymd_opt(1983, 3, 22).unwrap(),
-            NaiveDate::from_ymd_opt(1981, 4, 30).unwrap(),
-        ],
-        "weight" => [57.9, 72.5, 53.6, 83.1],  // (kg)
-        "height" => [1.56, 1.77, 1.65, 1.75],  // (m)
-    )
-    .unwrap();
+    // 1) Simula 100.000 linhas de dados
+    let n = 100_000;
+    let mut names = Vec::with_capacity(n);
+    let mut ages = Vec::with_capacity(n);
+    let mut weights = Vec::with_capacity(n);
+    let mut heights = Vec::with_capacity(n);
 
-    let result = df
-        .clone()
+    for i in 0..n
+    {
+        names.push(format!("User{}", i % 1_000));
+        ages.push((i % 60 + 18) as u32);
+        weights.push(50.0 + ((i % 50) as f64) * 0.5);
+        heights.push(1.50 + ((i % 50) as f64) * 0.01);
+    }
+
+    // 2) Cria o DataFrame a partir de Series
+    let df = DataFrame::new(vec![
+        Series::new("name".into(), names).into(),
+        Series::new("age".into(), ages).into(),
+        Series::new("weight".into(), weights).into(),
+        Series::new("height".into(), heights).into(),
+    ])?;
+
+    // 3) Pipeline Lazy com filtro mais generoso e agregações
+    let lazy_df = df
         .lazy()
-        .select([
-            col("name"),
-            col("birthdate").dt().year().alias("birth_year"),
-            (col("weight") / col("height").pow(2)).alias("bmi"),
+        // filtra quem tem mais de 30 anos
+        .filter(col("age").gt(lit(30u32)))
+        // calcula BMI
+        .with_column((col("weight") / col("height").pow(2)).alias("bmi"))
+        // agrupa por nome
+        .group_by(vec![col("name")])
+        .agg(vec![
+            col("bmi").mean().alias("mean_bmi"),
+            col("bmi").std(0).alias("std_bmi"),
+            col("age").min().alias("min_age"),
+            col("age").max().alias("max_age"),
+            col("age").count().alias("count"),
         ])
-        .collect()?;
-    println!("{}", result);
+        // limiar menor para incluir quase todos os grupos
+        .filter(col("mean_bmi").gt(lit(20.0)))
+        // ordena pelo BMI médio crescente
+        .sort(
+            vec!["mean_bmi".to_string()],
+            SortMultipleOptions::default()
+                .with_order_descending(false)
+                .with_nulls_last(true),
+        )
+        // limite alto para capturar entre 1.000 e 10.000 grupos
+        .limit(10_000);
 
-    // serialização para JSON (pode falhar e virar ApiError::Json)
-    let json = df_to_json_each_column(&df)?.to_string();
+    // 4) Executa só o collect()
+    let result_df = lazy_df.collect()?;
 
+    // 5) Serializa para JSON
+    let json = df_to_json_each_column(&result_df)?.to_string();
     Ok(HttpResponse::Ok().content_type("application/json").body(json))
 }
 
@@ -114,6 +143,7 @@ async fn main() -> std::io::Result<()>
             .service(users_df_json)
             .service(users)
     })
+    .workers(4)
     .bind("127.0.0.1:8080")?
     .run()
     .await
