@@ -34,7 +34,7 @@ struct User
     names: Vec<String>,
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() -> Result<(), std::io::Error>
 {
     let app = Router::new()
@@ -73,7 +73,7 @@ async fn get_user() -> Json<User>
 async fn get_users_df() -> Result<Response, AppError>
 {
     // 1) Simula 100.000 linhas
-    let n = 1_000_000;
+    let n = 10_000;
     let mut names = Vec::with_capacity(n);
     let mut ages = Vec::with_capacity(n);
     let mut weights = Vec::with_capacity(n);
@@ -115,7 +115,7 @@ async fn get_users_df() -> Result<Response, AppError>
                 .with_order_descending(false)
                 .with_nulls_last(true),
         )
-        .limit(100_000);
+        .limit(20_000);
 
     #[derive(Serialize, Deserialize)]
     struct Wrapper
@@ -149,7 +149,7 @@ async fn get_users_df() -> Result<Response, AppError>
 async fn get_large_users_df() -> Result<Response, AppError>
 {
     // 1) Simula 100.000 linhas
-    let n = 500_000;
+    let n = 50_000;
     let mut names = Vec::with_capacity(n);
     let mut ages = Vec::with_capacity(n);
     let mut weights = Vec::with_capacity(n);
