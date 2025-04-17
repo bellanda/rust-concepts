@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::env;
 use std::fs::File;
 use std::fs::{self};
 use std::io::Write;
@@ -9,9 +10,9 @@ use std::time::Instant;
 use anyhow::Context;
 use anyhow::Result;
 use chrono::Local;
-use clap::Parser;
 use colored::*;
 use console::Term;
+use dotenv::dotenv;
 use futures::stream;
 use futures::StreamExt;
 use indicatif::ProgressBar;
@@ -21,33 +22,20 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Parser, Debug)]
-#[clap(name = "Rust Benchmark", about = "Benchmark para servidor Xitca Web em Rust")]
-struct Args
+/// Configurações do benchmark, carregadas via `env::var`.
+#[derive(Debug)]
+struct Config
 {
-    /// Número de requisições concorrentes
-    #[clap(short, long, default_value = "100")]
     concurrency: usize,
-
-    /// Número máximo de requisições por endpoint
-    #[clap(short, long, default_value = "10000000")]
     requests: usize,
-
-    /// Duração máxima do teste em segundos
-    #[clap(short, long, default_value = "15")]
     duration: u64,
-
-    /// Pular fase de warmup
-    #[clap(long)]
     no_warmup: bool,
-
-    /// Desativar conexões HTTP keep-alive
-    #[clap(long)]
     no_keepalive: bool,
-
-    /// Forçar teste em todos os endpoints, mesmo os que retornam erro
-    #[clap(long)]
     force_all: bool,
+    base_url: String,
+    endpoints: Vec<String>,
+    results_dir: String,
+    default_req_per_batch: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -82,459 +70,330 @@ struct BenchmarkResult
     latency_stats: Option<LatencyStats>,
 }
 
-/// URLs para testar
-const BASE_URL: &str = "http://localhost:8080";
-const ENDPOINTS: &[&str] = &["/users-df"];
-
-// Diretório para salvar os resultados
-const RESULTS_DIR: &str = "results";
-
-// Constantes para melhorar o desempenho
-const DEFAULT_REQ_PER_BATCH: usize = 500;
-
 #[tokio::main]
 async fn main() -> Result<()>
 {
-    let args = Args::parse();
+    // Carrega .env, se existir
+    dotenv().ok();
 
+    // …e então lê cada variável, com default quando aplicável:
+    let concurrency = env::var("CONCURRENCY")
+        .unwrap_or_else(|_| "100".into())
+        .parse::<usize>()
+        .expect("CONCURRENCY deve ser um número");
+    let requests = env::var("REQUESTS")
+        .unwrap_or_else(|_| "10000000".into())
+        .parse::<usize>()
+        .expect("REQUESTS deve ser um número");
+    let duration = env::var("DURATION")
+        .unwrap_or_else(|_| "15".into())
+        .parse::<u64>()
+        .expect("DURATION deve ser um número");
+    let no_warmup = env::var("NO_WARMUP")
+        .unwrap_or_else(|_| "false".into())
+        .parse::<bool>()
+        .expect("NO_WARMUP deve ser true ou false");
+    let no_keepalive = env::var("NO_KEEPALIVE")
+        .unwrap_or_else(|_| "false".into())
+        .parse::<bool>()
+        .expect("NO_KEEPALIVE deve ser true ou false");
+    let force_all = env::var("FORCE_ALL")
+        .unwrap_or_else(|_| "false".into())
+        .parse::<bool>()
+        .expect("FORCE_ALL deve ser true ou false");
+    let base_url = env::var("BASE_URL").unwrap_or_else(|_| "http://localhost:8080".into());
+    let endpoints: Vec<String> = env::var("ENDPOINTS")
+        .unwrap_or_else(|_| "/users-df".into())
+        .split(',')
+        .map(str::trim)
+        .map(str::to_string)
+        .collect();
+    let results_dir = env::var("RESULTS_DIR").unwrap_or_else(|_| "results".into());
+    let default_req_per_batch = env::var("DEFAULT_REQ_PER_BATCH")
+        .unwrap_or_else(|_| "500".into())
+        .parse::<usize>()
+        .expect("DEFAULT_REQ_PER_BATCH deve ser um número");
+
+    let config = Config {
+        concurrency,
+        requests,
+        duration,
+        no_warmup,
+        no_keepalive,
+        force_all,
+        base_url,
+        endpoints,
+        results_dir,
+        default_req_per_batch,
+    };
+
+    // Exibe configurações iniciais
+    println!("{}", "Benchmark de API - Xitca Web".green().bold());
+    println!("Concorrência: {}", config.concurrency);
+    println!("Requisições máximas por endpoint: {}", config.requests);
+    println!("Duração máxima por endpoint: {} segundos", config.duration);
     println!(
-        "{}\n{}: {}\n{}: {}\n{}: {} {}\n{}: {}\n{}: {}\n{}: {}",
-        "Benchmark de API - Xitca Web".green().bold(),
-        "Concorrência".cyan(),
-        args.concurrency,
-        "Requisições máximas por endpoint".cyan(),
-        args.requests,
-        "Duração máxima por endpoint".cyan(),
-        args.duration,
-        "segundos".cyan(),
-        "Keepalive".cyan(),
-        if args.no_keepalive
+        "Keepalive: {}",
+        if config.no_keepalive
         {
             "Desativado".red()
         }
         else
         {
             "Ativado".green()
-        },
-        "Endpoints".cyan(),
-        ENDPOINTS.join(", "),
-        "Testar todos".cyan(),
-        if args.force_all { "Sim".yellow() } else { "Não".green() }
+        }
     );
-
+    println!("Endpoints: {:?}", config.endpoints);
     println!(
-        "{}\n{}",
-        "IMPORTANTE: Certifique-se de executar o servidor no modo RELEASE para máxima performance:"
-            .yellow()
-            .bold(),
-        "cd src/xitca && cargo run --release --bin \"2 - Json Response\"".white()
+        "Forçar todos: {}",
+        if config.force_all { "Sim".yellow() } else { "Não".green() }
     );
-
-    println!("\nPressione Enter quando o servidor estiver pronto...");
+    println!("Resultados serão salvos em: {}", config.results_dir);
+    println!(
+        "\n{}",
+        "IMPORTANTE: Execute o servidor no modo RELEASE:\ncd src/xitca && cargo run --release --bin '2 - Json Response'"
+            .yellow()
+            .bold()
+    );
     Term::stdout().read_key().context("Erro ao ler teclado")?;
 
-    // Validar se o servidor está rodando e quais endpoints estão disponíveis
-    let available_endpoints = validate_endpoints(args.force_all).await?;
-
+    // Valida endpoints
+    let available_endpoints = validate_endpoints(&config).await?;
     if available_endpoints.is_empty()
     {
-        println!(
-            "{}",
-            "Nenhum endpoint disponível! Verifique se o servidor está rodando."
-                .red()
-                .bold()
-        );
+        println!("{}", "Nenhum endpoint disponível!".red().bold());
         return Ok(());
     }
 
-    println!("\n{}", "Endpoints disponíveis:".green().bold());
-    for (endpoint, status) in &available_endpoints
+    // Warmup opcional
+    if !config.no_warmup
     {
-        println!("  {} - Status: {}", endpoint, status);
+        warmup(&config).await?;
     }
 
-    // Realizar warmup para JIT e caches
-    if !args.no_warmup
-    {
-        warmup(&available_endpoints.keys().map(|k| k.as_str()).collect::<Vec<_>>()).await?;
-    }
-
+    // Configura cliente HTTP
+    let client = build_client(&config)?;
     let mut all_results = HashMap::new();
 
-    // Configuração do cliente HTTP
-    let client = build_client(&args)?;
-
-    for (endpoint, _) in &available_endpoints
+    // Executa benchmarks por endpoint
+    for endpoint in &config.endpoints
     {
-        let url = format!("{}{}", BASE_URL, endpoint);
-        println!("\n{} {}", "Testando endpoint:".cyan().bold(), url.white());
-
-        let result = run_benchmark(&client, &url, &args).await?;
-
+        let url = format!("{}{}", &config.base_url, endpoint);
+        println!("\n{} {}", "Testando endpoint:".cyan().bold(), url);
+        let result = run_benchmark(&client, &url, &config).await?;
         all_results.insert(endpoint.clone(), result);
-
-        // Espera breve entre os testes
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
     println!("\n{}\n", "Benchmark concluído!".green().bold());
-    print_results(&all_results)?;
+    print_results(&all_results, &config)?;
 
     Ok(())
 }
 
-/// Valida quais endpoints estão disponíveis antes de iniciar o benchmark
-async fn validate_endpoints(force_all: bool) -> Result<HashMap<String, u16>>
+async fn validate_endpoints(config: &Config) -> Result<HashMap<String, u16>>
 {
-    println!("{}", "Validando endpoints disponíveis...".blue());
-    println!("{}", "Por padrão, apenas endpoints com status 2xx/3xx serão testados.".blue());
-    if force_all
-    {
-        println!(
-            "{}",
-            "Modo força: Todos os endpoints serão testados mesmo com erros.".yellow()
-        );
-    }
-
+    println!("{}", "Validando endpoints...".blue());
     let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
-
     let mut available = HashMap::new();
 
-    for &endpoint in ENDPOINTS
+    for endpoint in &config.endpoints
     {
-        let url = format!("{}{}", BASE_URL, endpoint);
+        let url = format!("{}{}", &config.base_url, endpoint);
         match client.get(&url).send().await
         {
-            Ok(response) =>
+            Ok(resp) =>
             {
-                let status = response.status().as_u16();
-                let status_ok = status < 400; // Considerar apenas códigos 2xx e 3xx como válidos
-                println!(
-                    "  {}: {} - {}",
-                    endpoint.green(),
-                    status,
-                    if status_ok { "OK".green() } else { "Falha".red() }
-                );
-
-                // Incluir endpoint se estiver funcionando ou se force_all estiver ativado
-                if status_ok || force_all
+                let status = resp.status().as_u16();
+                let ok = status < 400;
+                println!("  {} - {}", endpoint, status);
+                if ok || config.force_all
                 {
-                    available.insert(endpoint.to_string(), status);
-                    if !status_ok && force_all
-                    {
-                        println!(
-                            "    ↳ {} {}",
-                            "Incluindo mesmo com erro:".yellow(),
-                            "Modo força ativado".yellow()
-                        );
-                    }
-                }
-                else
-                {
-                    println!("    ↳ {} {}", "Pulando:".yellow(), "Endpoint respondeu com erro".yellow());
+                    available.insert(endpoint.clone(), status);
                 }
             },
-            Err(e) =>
+            Err(_) if config.force_all =>
             {
-                println!("  {}: {} - {}", endpoint.red(), "Erro", e);
-                // Incluir apenas se force_all estiver ativado
-                if force_all
-                {
-                    println!(
-                        "    ↳ {} {}",
-                        "Incluindo mesmo com erro:".yellow(),
-                        "Modo força ativado".yellow()
-                    );
-                    available.insert(endpoint.to_string(), 0);
-                }
+                available.insert(endpoint.clone(), 0);
             },
+            Err(e) => println!("  {} - erro: {}", endpoint, e),
         }
     }
-
-    if available.is_empty()
-    {
-        println!("{}", "Aviso: Nenhum endpoint funcional encontrado!".red().bold());
-        println!(
-            "{}",
-            "Execute com --force-all para testar todos os endpoints mesmo com erros.".yellow()
-        );
-    }
-
     Ok(available)
 }
 
-fn build_client(args: &Args) -> Result<Client>
+fn build_client(config: &Config) -> Result<Client>
 {
-    let mut client_builder = Client::builder()
+    let mut builder = Client::builder()
         .user_agent("rust-benchmark/0.1.0")
-        .pool_max_idle_per_host(args.concurrency)
-        .pool_max_idle_per_host(args.concurrency * 4)
+        .pool_max_idle_per_host(config.concurrency * if config.no_keepalive { 0 } else { 4 })
         .tcp_nodelay(true)
         .timeout(Duration::from_secs(60));
 
-    if args.no_keepalive
+    if !config.no_keepalive
     {
-        client_builder = client_builder.pool_max_idle_per_host(0);
-    }
-    else
-    {
-        client_builder = client_builder
+        builder = builder
             .pool_idle_timeout(Duration::from_secs(300))
             .http2_keep_alive_timeout(Duration::from_secs(300));
     }
 
-    Ok(client_builder.build()?)
+    Ok(builder.build()?)
 }
 
-async fn warmup(endpoints: &[&str]) -> Result<()>
+async fn warmup(config: &Config) -> Result<()>
 {
-    println!("{}", "Realizando warmup do servidor...".blue().bold());
-
-    // Usar um cliente otimizado para o warmup
+    println!("{}", "Realizando warmup...".blue());
     let client = Client::builder()
         .user_agent("rust-benchmark/0.1.0")
-        .pool_max_idle_per_host(500)
+        .pool_max_idle_per_host(config.concurrency)
         .tcp_nodelay(true)
         .pool_idle_timeout(Duration::from_secs(30))
         .build()?;
 
-    // Fazer mais requests de warmup para cada endpoint
-    for &endpoint in endpoints
+    for endpoint in &config.endpoints
     {
-        let url = format!("{}{}", BASE_URL, endpoint);
-        println!("Warming up: {}", url);
-
-        // Executar em várias ondas para melhor aquecimento
+        let url = format!("{}{}", &config.base_url, endpoint);
         for wave in 0..3
         {
-            println!("  Onda de warmup {}/3...", wave + 1);
-
-            // Aumentar gradualmente o número de requisições
-            let num_requests = 100 * (wave + 1);
-
-            let futures = (0..num_requests).map(|_| {
-                let client = client.clone();
-                let url = url.clone();
+            let num = 100 * (wave + 1);
+            let futures = (0..num).map(|_| {
+                let c = client.clone();
+                let u = url.clone();
                 async move {
-                    match client.get(&url).header("Connection", "keep-alive").send().await
-                    {
-                        Ok(response) =>
-                        {
-                            // Consumir o corpo para liberar a conexão
-                            let _ = response.bytes().await;
-                        },
-                        Err(_) =>
-                        {},
-                    }
+                    let _ = c.get(&u).header("Connection", "keep-alive").send().await;
                 }
             });
-
-            // Usar uma concorrência menor para não sobrecarregar durante o warmup
-            let concurrency = std::cmp::min(num_requests, 100);
-
-            // Executar as requisições de warmup
-            stream::iter(futures).buffer_unordered(concurrency).collect::<Vec<_>>().await;
-
-            // Pequena pausa entre as ondas
+            stream::iter(futures)
+                .buffer_unordered(std::cmp::min(num, config.concurrency))
+                .collect::<Vec<_>>()
+                .await;
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
     }
-
-    println!("{}\n", "Warmup concluído.".blue().bold());
-
-    // Pausa para permitir que o servidor se estabilize
+    println!("{}", "Warmup concluído.".blue());
     tokio::time::sleep(Duration::from_secs(1)).await;
-
     Ok(())
 }
 
-async fn run_benchmark(client: &Client, url: &str, args: &Args) -> Result<BenchmarkResult>
+async fn run_benchmark(client: &Client, url: &str, config: &Config) -> Result<BenchmarkResult>
 {
-    let start_time = Instant::now();
-    let end_time = start_time + Duration::from_secs(args.duration);
-
-    // Pré-alocar com um tamanho razoável para evitar muitas realocações
-    let expected_capacity = std::cmp::min(args.requests, 1_000_000);
-    let mut results = Vec::with_capacity(expected_capacity);
-
-    // Ajustar o estilo da barra de progresso
-    let pb = ProgressBar::new(args.requests as u64);
+    let start = Instant::now();
+    let end = start + Duration::from_secs(config.duration);
+    let mut results = Vec::new();
+    let pb = ProgressBar::new(config.requests as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.cyan} [{bar:40.cyan/blue}] {pos}/{len} ({elapsed_precise}) {percent}% ({eta}) [RPS: {msg}]")
-            .unwrap()
+            .template(
+                "{spinner:.cyan} [{bar:40.cyan/blue}] {pos}/{len} ({elapsed_precise}) {percent}% ({eta}) [RPS: {msg}]",
+            )?
             .progress_chars("►■□"),
     );
-    pb.enable_steady_tick(Duration::from_millis(100));
-
-    let mut current_requests = 0;
-
-    // Lotes menores no início para ajustar progressivamente
-    let mut batch_size = std::cmp::min(DEFAULT_REQ_PER_BATCH, args.concurrency);
-
-    // Para calcular a taxa real de requisições por segundo
-    let mut last_report_time = start_time;
-    let mut last_report_count = 0;
+    let mut current = 0;
+    let mut batch_size = std::cmp::min(config.default_req_per_batch, config.concurrency);
+    let (mut last_time, mut last_count) = (start, 0);
     let mut current_rps = 0.0;
 
-    while Instant::now() < end_time && current_requests < args.requests
+    while Instant::now() < end && current < config.requests
     {
-        // Aumentar gradualmente o tamanho do lote para encontrar o ponto ótimo
-        if current_requests > 1000
+        if current > 1000
         {
-            batch_size = std::cmp::min(args.concurrency, args.requests - current_requests);
+            batch_size = std::cmp::min(config.concurrency, config.requests - current);
         }
+        let batch = run_batch(client, url, batch_size).await;
+        let cnt = batch.len();
+        results.extend(batch);
+        current += cnt;
+        pb.set_position(current as u64);
 
-        let batch_results = run_batch(client, url, batch_size).await;
-        let batch_count = batch_results.len();
-
-        if batch_count == 0
-        {
-            // Se não recebemos resultados, algo está errado
-            println!("Aviso: Lote retornou 0 resultados. Servidor pode estar sobrecarregado.");
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
-        }
-
-        results.extend(batch_results);
-        current_requests += batch_count;
-
-        // Atualizar progresso
-        let position = std::cmp::min(current_requests, args.requests) as u64;
-        pb.set_position(position);
-
-        // Calcular RPS em intervalos regulares (a cada 1 segundo) para evitar o bug
         let now = Instant::now();
-        let elapsed_since_last_report = now.duration_since(last_report_time).as_secs_f64();
-
-        if elapsed_since_last_report >= 1.0
+        let elapsed = now.duration_since(last_time);
+        if elapsed.as_secs_f64() >= 1.0
         {
-            let requests_since_last_report = current_requests - last_report_count;
-            current_rps = requests_since_last_report as f64 / elapsed_since_last_report;
-
-            // Atualizar mensagem com RPS atual mais preciso
+            let since = current - last_count;
+            current_rps = since as f64 / elapsed.as_secs_f64();
             pb.set_message(format!("{:.2}", current_rps));
-
-            // Resetar contadores para próximo intervalo
-            last_report_time = now;
-            last_report_count = current_requests;
-        }
-
-        // Pequena pausa para permitir que o progresso seja atualizado
-        if current_requests % 10000 == 0
-        {
-            tokio::task::yield_now().await;
+            last_time = now;
+            last_count = current;
         }
     }
 
-    pb.finish_with_message(format!("Completo: {} requests, {:.2} req/s", current_requests, current_rps));
-
-    let total_time = start_time.elapsed().as_secs_f64();
-
+    pb.finish_with_message(format!("Completo: {} req, {:.2} req/s", current, current_rps));
+    let total = start.elapsed().as_secs_f64();
     if results.is_empty()
     {
         return Ok(BenchmarkResult {
             requests: 0,
             successful: 0,
-            total_time,
+            total_time: total,
             rps: 0.0,
             success_rate: 0.0,
             latency_stats: None,
         });
     }
 
-    let successful = results.iter().filter(|r| r.success).count();
-
-    // Para grandes volumes, usar amostragem para calcular as estatísticas de latência
-    let latencies: Vec<f64> = if results.len() > 10000
+    let success = results.iter().filter(|r| r.success).count();
+    let latencies: Vec<f64> = if results.len() > 10_000
     {
-        // Usar amostragem aleatória para grandes volumes
         let mut rng = rand::thread_rng();
-        results.choose_multiple(&mut rng, 10000).map(|r| r.duration_ms).collect()
+        results.choose_multiple(&mut rng, 10_000).map(|r| r.duration_ms).collect()
     }
     else
     {
         results.iter().map(|r| r.duration_ms).collect()
     };
 
-    let latency_stats = if !latencies.is_empty()
-    {
-        Some(LatencyStats {
-            min: latencies.iter().fold(f64::INFINITY, |a, &b| a.min(b)),
-            max: latencies.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b)),
-            mean: latencies.iter().sum::<f64>() / latencies.len() as f64,
-            median: percentile(&latencies, 50.0),
-            p90: percentile(&latencies, 90.0),
-            p99: percentile(&latencies, 99.0),
-        })
-    }
-    else
-    {
-        None
+    let stats = LatencyStats {
+        min: *latencies.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+        max: *latencies.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+        mean: latencies.iter().sum::<f64>() / latencies.len() as f64,
+        median: percentile(&latencies, 50.0),
+        p90: percentile(&latencies, 90.0),
+        p99: percentile(&latencies, 99.0),
     };
-
-    // Calcular o RPS real baseado no número de requisições completas e tempo total
-    let actual_rps = results.len() as f64 / total_time;
 
     Ok(BenchmarkResult {
         requests: results.len(),
-        successful,
-        total_time,
-        rps: actual_rps, // Usar valor calculado real aqui, não o da barra de progresso
-        success_rate: if results.is_empty()
-        {
-            0.0
-        }
-        else
-        {
-            successful as f64 / results.len() as f64
-        },
-        latency_stats,
+        successful: success,
+        total_time: total,
+        rps: results.len() as f64 / total,
+        success_rate: success as f64 / results.len() as f64,
+        latency_stats: Some(stats),
     })
 }
 
 async fn run_batch(client: &Client, url: &str, size: usize) -> Vec<RequestResult>
 {
-    // Criar um vetor com capacidade pré-alocada para evitar realocações
-    let mut results = Vec::with_capacity(size);
-
-    // Criar lotes menores para melhor controle de recursos
-    const MAX_BATCH_SIZE: usize = 1000;
-    let batch_chunks = (size + MAX_BATCH_SIZE - 1) / MAX_BATCH_SIZE; // Arredondamento para cima
-
-    for _ in 0..batch_chunks
+    let mut out = Vec::with_capacity(size);
+    const MAX_BATCH: usize = 1_000;
+    let chunks = (size + MAX_BATCH - 1) / MAX_BATCH;
+    for _ in 0..chunks
     {
-        let batch_size = std::cmp::min(MAX_BATCH_SIZE, size - results.len());
-        if batch_size == 0
-        {
-            break;
-        }
-
-        let futures = (0..batch_size).map(|_| {
-            let client = client.clone();
-            let url = url.to_string();
+        let bs = std::cmp::min(MAX_BATCH, size - out.len());
+        let futs = (0..bs).map(|_| {
+            let cli = client.clone();
+            let u = url.to_string();
             async move {
                 let start = Instant::now();
-                match client.get(&url).header("Connection", "keep-alive").send().await
+                match cli.get(&u).header("Connection", "keep-alive").send().await
                 {
-                    Ok(response) =>
+                    Ok(r) =>
                     {
-                        let status = response.status();
-                        let _ = response.bytes().await; // consumir o corpo
-                        let duration = start.elapsed().as_secs_f64() * 1000.0;
-
+                        let status = r.status().as_u16();
+                        let success = r.status().is_success();
+                        let _ = r.bytes().await;
+                        let d = start.elapsed().as_secs_f64() * 1000.0;
                         RequestResult {
-                            duration_ms: duration,
-                            status: status.as_u16(),
-                            success: status.is_success(),
+                            duration_ms: d,
+                            status,
+                            success,
                             error: None,
                         }
                     },
                     Err(e) =>
                     {
-                        let duration = start.elapsed().as_secs_f64() * 1000.0;
+                        let d = start.elapsed().as_secs_f64() * 1000.0;
                         RequestResult {
-                            duration_ms: duration,
+                            duration_ms: d,
                             status: 0,
                             success: false,
                             error: Some(e.to_string()),
@@ -543,117 +402,84 @@ async fn run_batch(client: &Client, url: &str, size: usize) -> Vec<RequestResult
                 }
             }
         });
-
-        // Usar buffer_unordered para limitar a concorrência dentro do lote
-        let batch_results: Vec<RequestResult> = stream::iter(futures).buffer_unordered(batch_size).collect().await;
-
-        results.extend(batch_results);
+        let res: Vec<RequestResult> = stream::iter(futs).buffer_unordered(bs).collect().await;
+        out.extend(res);
     }
-
-    results
+    out
 }
 
-fn percentile(data: &[f64], percentile: f64) -> f64
+fn percentile(data: &[f64], p: f64) -> f64
 {
     if data.is_empty()
     {
         return 0.0;
     }
-
-    let mut sorted_data = data.to_vec();
-    sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-    let index = (sorted_data.len() as f64 - 1.0) * (percentile / 100.0);
-    let floor = index.floor() as usize;
-    let ceil = index.ceil() as usize;
-
-    if floor == ceil
+    let mut s = data.to_vec();
+    s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let idx = (s.len() - 1) as f64 * p / 100.0;
+    let lo = idx.floor() as usize;
+    let hi = idx.ceil() as usize;
+    if lo == hi
     {
-        return sorted_data[floor];
+        s[lo]
     }
-
-    let weight = index - floor as f64;
-    sorted_data[floor] * (1.0 - weight) + sorted_data[ceil] * weight
+    else
+    {
+        s[lo] * (hi as f64 - idx) + s[hi] * (idx - lo as f64)
+    }
 }
 
-fn print_results(all_results: &HashMap<String, BenchmarkResult>) -> Result<()>
+fn print_results(all: &HashMap<String, BenchmarkResult>, config: &Config) -> Result<()>
 {
-    // Imprimir tabela de resultados
     println!("{:=^80}", " Resultados do Benchmark ");
     println!(
-        "{:<15} | {:>10} | {:>15} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8}",
+        "{:<15} | {:>10} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8}",
         "Endpoint", "Requests", "RPS", "Sucesso", "Média", "Mediana", "p90", "p99"
     );
     println!("{:-<80}", "");
-
-    for (endpoint, result) in all_results
+    for (ep, r) in all
     {
-        if let Some(latency) = &result.latency_stats
+        if let Some(lat) = &r.latency_stats
         {
             println!(
-                "{:<15} | {:>10} | {:>15.2} | {:>7.1}% | {:>7.2}ms | {:>7.2}ms | {:>7.2}ms | {:>7.2}ms",
-                endpoint,
-                result.requests,
-                result.rps,
-                result.success_rate * 100.0,
-                latency.mean,
-                latency.median,
-                latency.p90,
-                latency.p99
-            );
-        }
-        else
-        {
-            println!(
-                "{:<15} | {:>10} | {:>15.2} | {:>7.1}% | {:>8} | {:>8} | {:>8} | {:>8}",
-                endpoint,
-                result.requests,
-                result.rps,
-                result.success_rate * 100.0,
-                "N/A",
-                "N/A",
-                "N/A",
-                "N/A"
+                "{:<15} | {:>10} | {:>8.2} | {:>7.1}% | {:>7.2}ms | {:>7.2}ms | {:>7.2}ms | {:>7.2}ms",
+                ep,
+                r.requests,
+                r.rps,
+                r.success_rate * 100.0,
+                lat.mean,
+                lat.median,
+                lat.p90,
+                lat.p99
             );
         }
     }
 
-    // Salvar resultados em arquivo
-    let results_dir = Path::new(RESULTS_DIR);
-    if !results_dir.exists()
+    // Salva em arquivo
+    let dir = Path::new(&config.results_dir);
+    if !dir.exists()
     {
-        fs::create_dir_all(results_dir)?;
+        fs::create_dir_all(dir)?;
     }
-
-    let timestamp = Local::now().format("%Y%m%d_%H%M%S");
-    let filename = format!("{}/benchmark_{}.txt", RESULTS_DIR, timestamp);
-    let mut file = File::create(&filename)?;
-
-    writeln!(file, "Resultados do Benchmark - {}", Local::now())?;
-    writeln!(file, "{}", "=".repeat(50))?;
-    writeln!(file)?;
-
-    for (endpoint, result) in all_results
+    let ts = Local::now().format("%Y%m%d_%H%M%S");
+    let file_path = dir.join(format!("benchmark_{}.txt", ts));
+    let mut f = File::create(&file_path)?;
+    writeln!(f, "Resultados do Benchmark - {:?}", Local::now())?;
+    for (ep, r) in all
     {
-        writeln!(file, "Endpoint: {}", endpoint)?;
-        writeln!(file, "Requests: {}", result.requests)?;
-        writeln!(file, "Requests por segundo: {:.2}", result.rps)?;
-        writeln!(file, "Taxa de sucesso: {:.1}%", result.success_rate * 100.0)?;
-
-        if let Some(latency) = &result.latency_stats
+        writeln!(f, "Endpoint: {}", ep)?;
+        writeln!(f, "Requests: {}", r.requests)?;
+        writeln!(f, "RPS: {:.2}", r.rps)?;
+        writeln!(f, "Sucesso: {:.1}%", r.success_rate * 100.0)?;
+        if let Some(lat) = &r.latency_stats
         {
-            writeln!(file, "Latência mínima: {:.2} ms", latency.min)?;
-            writeln!(file, "Latência média: {:.2} ms", latency.mean)?;
-            writeln!(file, "Latência mediana: {:.2} ms", latency.median)?;
-            writeln!(file, "Latência p90: {:.2} ms", latency.p90)?;
-            writeln!(file, "Latência p99: {:.2} ms", latency.p99)?;
-            writeln!(file, "Latência máxima: {:.2} ms", latency.max)?;
+            writeln!(f, "Latência média: {:.2} ms", lat.mean)?;
+            writeln!(f, "Mediana: {:.2} ms", lat.median)?;
+            writeln!(f, "p90: {:.2} ms", lat.p90)?;
+            writeln!(f, "p99: {:.2} ms", lat.p99)?;
         }
-
-        writeln!(file, "\n{}\n", "-".repeat(50))?;
+        writeln!(f, "---")?;
     }
-
-    println!("\nResultados salvos em {}", filename.green());
-
+    println!("\nResultados salvos em {:?}", file_path.display());
     Ok(())
 }

@@ -1,0 +1,28 @@
+Resultados do Benchmark - 2025-04-17T15:34:05.255871967-03:00
+Endpoint: /users
+Requests: 814716
+RPS: 81428.68
+Sucesso: 100.0%
+Latência média: 2.54 ms
+Mediana: 2.24 ms
+p90: 4.10 ms
+p99: 5.84 ms
+---
+Endpoint: /users-df
+Requests: 1000
+RPS: 86.31
+Sucesso: 100.0%
+Latência média: 2855.39 ms
+Mediana: 2830.46 ms
+p90: 5183.41 ms
+p99: 5836.85 ms
+---
+Endpoint: /users-large-df
+Requests: 1000
+RPS: 68.13
+Sucesso: 100.0%
+Latência média: 3639.87 ms
+Mediana: 3603.96 ms
+p90: 6585.73 ms
+p99: 7388.37 ms
+---
